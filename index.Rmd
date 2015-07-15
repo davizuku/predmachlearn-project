@@ -1,0 +1,37 @@
+---
+title: "Prediction Assignment"
+author: "David Álvarez Pons"
+output: html_document
+---
+
+# Exploratory Analysis
+
+##Downloading Data
+
+The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har].
+
+```{r downloading_data,echo=FALSE}
+# Data Folder
+if (!file.exists("data")){
+    dir.create("data");
+}
+
+# Training File
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv";
+fileName <- "./data/training.csv";
+if (!file.exists(fileName)){
+    download.file(fileUrl, destfile = paste0(fileName), method = "curl"); # only for MAC
+}
+
+# Testing File
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv";
+fileName <- "./data/testing.csv";
+if (!file.exists(fileName)){
+    download.file(fileUrl, destfile = paste0(fileName), method = "curl"); # only for MAC
+}
+
+```
+
+## Data Loading
+
+## Data Analysis
