@@ -1,14 +1,31 @@
 ---
-title: "Prediction Assignment"
+title: "Prediction Assignment - Practical Machine Learning"
 author: "David Álvarez Pons"
 output: html_document
 ---
 
-# Exploratory Analysis
+## Introduction
 
-##Downloading Data
+In this project we will try to predict how well barbells are performed based on the data obtained from several accelerometers disposed around the arms, belt and dumbell. First, we will perform some **exploratory analysis** to understand better what data we are working with. After that, we will show how to **build a model** using **cross validation**, explain the main **decisions** taken and computing the final **sample error**. We will use the `caret` package as explained in the lectures. 
 
-The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har].
+```{r libraries, echo=FALSE, warning=FALSE, message=FALSE}
+library(caret)
+library(rattle)
+```
+
+
+## Exploratory Analysis
+
+### Downloading Data
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+```{r data_origins}
+# Urls and Names
+fileUrls <- c(
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv");
+fileNames <- c("./data/training.csv", "./data/testing.csv");
+```
 
 ```{r downloading_data,echo=FALSE}
 # Data Folder
@@ -17,21 +34,231 @@ if (!file.exists("data")){
 }
 
 # Training File
-fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv";
-fileName <- "./data/training.csv";
-if (!file.exists(fileName)){
-    download.file(fileUrl, destfile = paste0(fileName), method = "curl"); # only for MAC
+if (!file.exists(fileNames[1])){
+    download.file(fileUrls[1], destfile = paste0(fileNames[1]), method = "curl");
 }
 
 # Testing File
-fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv";
-fileName <- "./data/testing.csv";
-if (!file.exists(fileName)){
-    download.file(fileUrl, destfile = paste0(fileName), method = "curl"); # only for MAC
+if (!file.exists(fileNames[2])){
+    download.file(fileUrls[2], destfile = paste0(fileNames[2]), method = "curl");
 }
 
 ```
 
-## Data Loading
+```{r data_loading, cache=TRUE, echo=FALSE, results='hide'}
+#Data Loading
+training <- read.csv(fileNames[1]);
+testing <- read.csv(fileNames[2]);
 
-## Data Analysis
+orgTraining <- training;
+orgTesting <- testing;
+
+rbind(dim(training), dim(testing));
+```
+
+### Data Preprocessing
+
+Observing the preprocessed data as can be seen in the Appendix, there are some columns that are considered as factors when they should be numbers, we will fix that. In addition, some columns of the test set are set to `logical` classes and should be set to `numeric`. Finally, a column named `X` was added as a result of reading the data form the CSV, we will remove it from our both data sets, as well as other non-numerical columns. Difference between training set before and after being preprocessed can be seen in the appendix.
+
+```{r preprocessing, cache=TRUE, echo=FALSE, warning=FALSE}
+
+# Remove columns by name.
+remove_cols <- c("X", "user_name", "raw_timestamp_part_1", 
+                 "raw_timestamp_part_2", "cvtd_timestamp", 
+                 "new_window", "num_window"
+);
+training[,remove_cols] <- list(NULL);
+testing[,remove_cols] <- list(NULL);
+
+lastNumColumn <- ncol(training)-1;
+for (col in 1:lastNumColumn){
+    training[,col] <- as.numeric(training[,col]);
+    testing[,col] <- as.numeric(testing[,col]);
+}
+
+# NA clean up
+training.nrow <- nrow(training);
+bad_columns <- apply(training, 2, function(col){
+    sum(is.na(col)) / training.nrow > 0.5;
+});
+training[,bad_columns] <- list(NULL);
+testing[,bad_columns] <- list(NULL);
+
+# Remove as well the columns with NAs in testing 
+# in order to be able to apply the model.
+testing.nrow <- nrow(testing);
+bad_columns <- apply(testing, 2, function(col){
+    sum(is.na(col)) / testing.nrow > 0.5;
+});
+training[,bad_columns] <- list(NULL);
+testing[,bad_columns] <- list(NULL);
+
+```
+
+
+### Data Analysis
+
+In this section we will analyse the data to see if there is any obvious relation among features. As we can see in the appendix, we decided to plot the different measures of Accelerometers (`accel`), Gyroscopes (`gyros`) and Magnets (`magnet`) versus the five different classes of performing the barbells. We chose to plot these covariates, although we could have chosen to plot any subset of the other available predictors. In this case, there is **very little correlation** between these covariates with the *classe* of the barbells.
+
+## Prediction Model
+
+In this section we will continue with the problem of variable selection and prediction function selection. We will use cross validation as a tool for taking these decisions. Note that we will **not use PCA** as a possible way to choose the most important variables for our model, due to the **non linearity** of the data.
+
+### Cross validation methodology
+
+In order to choose which kind of cross validation we will use, we will take into account the following assumptions:
+
+1. We consider the different attempts of barbells **time independent**, i.e. the main difference between attempts is due to the purpose of the person wanting to perform the exercice differently from the previous attempts. Hence, we **discard using Time Slices**
+2. Considering the size of the `training` set -- `r dim(training)[1]` -- we **discard using Leave One Out Cross Validation** due the computational cost it will envolve. 
+
+Having studied the previous considerations, we will apply the **K-fold** method of cross validation to find. The **resampling method is discarded** since the K-fold method ensures testing over all the samples of the training set in an easier way. 
+
+For the size of the folds we decide to create chunks that are approximately the 20% of the total size of the training set (`r dim(training)[1]`), that is, 4000. 
+
+```{r cross_validation}
+k_fold <- 5;
+```
+
+We will use the variable `k_fold` in the following section.
+
+### Prediction function choice
+    
+Using the different folds of the previous section (in the `trainControl` parameter), we will try to find the best possible prediction function. We will consider a single prediction algorithm for each of the different algorithms explained in the lectures, that is: Prediction Trees (`rpart`), Bagging (`treebag`), Boosting (`gbm`). We do not consider any Model Based Prediction algorithm since we think **the data does not follow any specific statistical model**. Additionally, we discard using Random Forests (`rf`) due its long execution time (> 6000 sec). 
+
+```{r prediction_algorithms, cache=TRUE, message=FALSE, warning=FALSE}
+fc <- trainControl(method = "cv", number=k_fold);
+``` 
+
+```{r prediction_trees, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+set.seed(2792);
+f <- "rpart";
+t <- system.time(
+    fm <- train(classe ~ ., trControl=fc, data=training, method=f)
+);
+assign(paste0(f,"Model"), fm);
+assign(paste0(f, "Info"), cbind(
+    method=f, execTime = t[3], acc= max(fm$results$Accuracy)
+));
+```
+
+```{r bagging, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+set.seed(2792);
+f <- "treebag";
+t <- system.time(
+    fm <- train(classe ~ ., trControl=fc, data=training, method=f)
+);
+assign(paste0(f,"Model"), fm);
+assign(paste0(f, "Info"), cbind(
+    method=f, execTime = t[3], acc= max(fm$results$Accuracy)
+));
+```
+
+```{r boosting, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+set.seed(2792);
+f <- "gbm";
+t <- system.time(
+    fm <- train(classe ~ ., trControl=fc, data=training, method=f,
+                verbose=FALSE)
+);
+assign(paste0(f,"Model"), fm);
+assign(paste0(f, "Info"), cbind(
+    method=f, execTime = t[3], acc= max(fm$results$Accuracy)
+));
+```
+
+```{r random_forests, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+#set.seed(2792);
+#f <- "rf";
+#t <- system.time(
+#    fm <- train(classe ~ ., trControl=fc, data=training, method=f, prox=TRUE)
+#);
+#assign(paste0(f,"Model"), fm);
+#assign(paste0(f, "Info"), cbind(
+#    method=f, execTime = t[3], acc= max(fm$results$Accuracy)
+#));
+```
+
+```{r prediction_information, echo=FALSE}
+modelTable <- rbind(rpartInfo, treebagInfo, gbmInfo);
+```
+
+
+### Sample Error
+
+In this table we can see the Accuracy (`acc`) of each of the previous methods as a result of applying K-fold Cross Validation to the training set. We choose the best one in terms of Accuracy for the final prediction on the `testing` data set. 
+
+```{r sample_error, echo=FALSE, warning=FALSE}
+rownames(modelTable) <- NULL;
+modelTable[, c("method", "acc", "execTime")];
+```
+
+```{r final_model, cache=TRUE, warning=FALSE}
+finalModel <- treebagModel;
+```
+```{r show_final_model, echo=FALSE}
+finalModel
+```
+
+
+Choosing the Bagging algorithm (`treebag`) gives an expected accuracy of `r round(max(finalModel$results$Accuracy), 4)` which is our **expected out of sample error**.
+
+### Apply Model to Testing
+
+Once we have chosen our best model, it is time to get the predictions in the test data set.
+
+```{r answers, message=FALSE, warning=FALSE}
+answers <- predict(finalModel, testing);
+answers
+```
+
+We will use the function provided by Coursera to write the answers in the correct format to be submitted.
+
+```{r write_function}
+if (!file.exists("answers")){
+    dir.create("answers");
+}
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("answers/problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers);
+```
+
+
+## Appendix
+
+```{r str_training, cache=TRUE}
+# Before preprocessing
+str(orgTraining);
+# After preprocessing;
+str(training);
+```
+
+```{r classe_table, cache=TRUE}
+table(training$classe);
+```
+
+```{r feature_plot, cache=TRUE}
+selCols <- grep("^accel_", names(training));
+featurePlot(x = training[,selCols],
+            y = training$classe,
+            plot = "boxplot");
+
+selCols <- grep("^magnet_", names(training));
+featurePlot(x = training[,selCols],
+            y = training$classe,
+            plot = "boxplot");
+
+selCols <- grep("^gyros_", names(training));
+featurePlot(x = training[,selCols],
+            y = training$classe,
+            plot = "boxplot");
+
+```
+
+
